@@ -28,11 +28,9 @@ class IP(Structure):
         self._protocol_map = {1: "ICMP", 6: "TCP", 17: "UDP"}
 
         #
-        self.len = self.len * 4
+        self.hlen = self.ihl * 4
 
         # human readable IP addresses
-        # NOTES: "<" - little eindian | "L" - unsigned long
-        #   struct.pack() return a bytes object
         self.src_address = socket.inet_ntoa(struct.pack("@I", self.src))
         self.dst_address = socket.inet_ntoa(struct.pack("@I", self.dst))
 
@@ -42,11 +40,60 @@ class IP(Structure):
         except KeyError:
             self.protocol = str(self.protocol_num)
 
+
+class TCP(Structure):
+    _fields_ = [
+        ("src", c_ushort),
+        ("dst", c_ushort),
+        ("seq", c_uint32),
+        ("ack", c_uint32),
+        ("offset", c_ubyte, 4),
+        ("res", c_ubyte, 4),
+        ("control", c_ubyte),
+        ("wsize", c_ushort),
+        ("csum", c_ushort),
+        ("urgent", c_ushort)
+    ]
+
+    def __new__(self, socket_buffer=None):
+        return self.from_buffer_copy(socket_buffer)
+
+    def __init__(self, socket_buffer=None):
+        pass
+
+
+class Packet:
+    def __init__(self, socket_buffer):
+        self.ip_header = IP(socket_buffer[:20])
+        self.tcp_header = TCP(socket_buffer[self.ip_header.ihl:self.ip_header.ihl + 20])
+        self._hsize = self.ip_header.hlen + self.tcp_header.offset * 4
+        self.data = socket_buffer[self._hsize:]
+
+    def __str__(self):
+        return "Version: {} IP Header Length: {} Protocol: {} Total Length: {} TTL: {}\n" \
+               "Source IP: {} Source Port: {} Destination IP: {} Destination Port: {}\n" \
+               "Sequence Number: {} Acknowledment: {}\n" \
+               "Data: {}\n\n".format(
+                    self.ip_header.version,
+                    self.ip_header.hlen,
+                    self.ip_header.protocol,
+                    self.ip_header.len,
+                    self.ip_header.ttl,
+                    self.ip_header.src_address,
+                    self.tcp_header.src,
+                    self.ip_header.dst_address,
+                    self.tcp_header.dst,
+                    self.tcp_header.seq,
+                    self.tcp_header.ack,
+                    str(self.data, encoding="latin1")
+                )
+
+
 # create a raw socket and bind it to the public interface
 if os.name == "nt":
     socket_protocol = socket.IPPROTO_IP  # sniff all incoming IP packets, regardless of the protocol
 else:
-    socket_protocol = socket.IPPROTO_TCP  # sniff only ICMP packets
+    socket_protocol = socket.IPPROTO_TCP
 
 sniffer = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket_protocol)
 sniffer.bind(('', 5555))
@@ -61,23 +108,8 @@ try:
     while True:
         # read packet bytes
         raw_buffer = sniffer.recvfrom(65565)[0]  # returns (bytes, address)
-        # create an IP header from the first 20 bytes if the buffer
-        ip_header = IP(raw_buffer[:20])  # since raw_buffer is a bytes object (an immutable sequence
-        # in range [0, 255]), the "jumps" are made byte-by-byte
-        # print the detected protocol and the hosts
-        print(
-            "Version: {} IP Header Length: {} TOS: {} Total Length: {} TTL: {}\n"
-            "Protocol: {} Source IP: {} Destination IP: {}\n\n".format(
-                ip_header.version,
-                ip_header.ihl,
-                ip_header.tos,
-                ip_header.len,
-                ip_header.ttl,
-                ip_header.protocol,
-                ip_header.src_address,
-                ip_header.dst_address
-            )
-        )
+        packet = Packet(raw_buffer)
+        print(packet)
 
 # handle CTRL-C
 except KeyboardInterrupt:
